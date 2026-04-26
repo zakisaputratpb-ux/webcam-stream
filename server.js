@@ -98,10 +98,9 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
 
 // Listen on all network interfaces so phones can connect
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(process.env.PORT || 3000, '0.0.0.0', () => {
   const os = require('os');
   const interfaces = os.networkInterfaces();
   let localIP = 'localhost';
