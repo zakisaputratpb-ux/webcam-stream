@@ -3,164 +3,94 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Webcam Client</title>
+    <title>Webcam Stream - Client</title>
     <style>
         body {
             background: #0a0a0a;
             color: white;
             font-family: system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            margin: 0;
-            text-align: center;
         }
-        .container { padding: 20px; max-width: 320px; }
-        h1 { font-size: 28px; margin-bottom: 8px; }
-        .status { margin: 20px 0; font-size: 15px; color: #aaa; }
-        button {
-            background: #3b82f6;
-            color: white;
-            border: none;
-            padding: 16px 40px;
-            font-size: 17px;
+        h1 { margin: 20px 0 10px; font-size: 24px; }
+        #status {
+            margin-bottom: 15px;
+            padding: 8px 16px;
+            background: #1a1a1a;
             border-radius: 9999px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-        button:disabled { background: #555; }
-        .error {
-            background: #3a1f1f;
-            color: #f87171;
-            padding: 12px 16px;
-            border-radius: 12px;
-            margin-top: 16px;
             font-size: 14px;
+        }
+        #stream {
+            max-width: 100%;
+            max-height: 80vh;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .error {
+            color: #f87171;
+            background: #3a1f1f;
+            padding: 12px 20px;
+            border-radius: 12px;
+            margin-top: 20px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div style="font-size: 60px; margin-bottom: 16px;">📹</div>
-        <h1>Webcam Client</h1>
-        <div id="status" class="status">Ready to stream</div>
-        
-        <button id="start-btn" onclick="startStreaming()">Start Streaming</button>
-        
-        <div id="error-box" class="error" style="display: none;"></div>
-    </div>
+    <h1>📹 Live Stream from Phone</h1>
+    <div id="status">Connecting to server...</div>
+    
+    <img id="stream" src="" alt="Live Stream" style="display: none;">
+    
+    <div id="error" class="error" style="display: none;"></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        let socket = null;
-        let localStream = null;
-        let peerConnection = null;
-        let roomId = 'demo';
+        const statusEl = document.getElementById('status');
+        const streamEl = document.getElementById('stream');
+        const errorEl = document.getElementById('error');
 
-        // Get room from URL
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('room')) roomId = urlParams.get('room');
+        // Connect to Socket.IO server
+        const socket = io();
 
-        function updateStatus(text, isError = false) {
-            const statusEl = document.getElementById('status');
-            statusEl.innerHTML = isError ? 
-                `<span style="color:#f87171">⚠ ${text}</span>` : text;
-        }
+        socket.on('connect', () => {
+            statusEl.innerHTML = '✅ Connected • Waiting for stream from phone...';
+            console.log('[Client] Connected to server');
+        });
 
-        function showError(msg) {
-            const errorBox = document.getElementById('error-box');
-            errorBox.innerHTML = msg;
-            errorBox.style.display = 'block';
-            setTimeout(() => errorBox.style.display = 'none', 6000);
-        }
+        socket.on('connect_error', () => {
+            statusEl.innerHTML = '❌ Connection failed';
+            errorEl.innerHTML = 'Cannot connect to server. Please refresh.';
+            errorEl.style.display = 'block';
+        });
 
-        async function startStreaming() {
-            const btn = document.getElementById('start-btn');
-            btn.disabled = true;
-            btn.textContent = 'Requesting camera...';
-
-            try {
-                // 1. Get camera access first
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'user' },
-                    audio: false
-                });
-
-                // 2. Connect to signaling server
-                socket = io();
-
-                socket.on('connect', () => {
-                    console.log('Connected to server');
-                    socket.emit('join-room', { roomId, role: 'client' });
-                    updateStatus('Streaming active • Camera connected');
-                    btn.style.display = 'none';
-                });
-
-                socket.on('connect_error', () => {
-                    showError('Connection failed. Please refresh the page.');
-                    btn.disabled = false;
-                    btn.textContent = 'Try Again';
-                });
-
-                // 3. Create WebRTC connection
-                const config = {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                };
-
-                peerConnection = new RTCPeerConnection(config);
-
-                localStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, localStream);
-                });
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate && socket) {
-                        socket.emit('ice-candidate', { roomId, candidate: event.candidate });
-                    }
-                };
-
-                socket.on('answer', async (data) => {
-                    if (peerConnection) {
-                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-                    }
-                });
-
-                socket.on('ice-candidate', async (data) => {
-                    if (peerConnection && data.candidate) {
-                        await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-                    }
-                });
-
-                // Create and send offer
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                socket.emit('offer', { roomId, offer });
-
-            } catch (err) {
-                console.error(err);
-                let msg = 'Failed to access camera. ';
-                if (err.name === 'NotAllowedError') {
-                    msg += 'Please allow camera permission in your browser settings.';
-                } else if (err.name === 'NotFoundError') {
-                    msg += 'No camera found on this device.';
-                } else {
-                    msg += err.message;
-                }
-                showError(msg);
-                btn.disabled = false;
-                btn.textContent = 'Try Again';
-                updateStatus('Camera access denied', true);
+        // Listen for frames from Android app
+        socket.on('frame', (data) => {
+            if (data.image) {
+                // Update image source with base64 from phone
+                streamEl.src = 'data:image/jpeg;base64,' + data.image;
+                streamEl.style.display = 'block';
+                statusEl.innerHTML = '📡 Streaming live from phone';
             }
-        }
+        });
 
-        // Auto-connect socket when page loads (for faster start)
-        window.onload = () => {
-            console.log('%c[Client] Page loaded. Click button to start.', 'color:#666');
-        };
+        // Optional: show when phone disconnects
+        socket.on('disconnect', () => {
+            statusEl.innerHTML = '⚠ Phone disconnected';
+        });
+
+        console.log('%c[Client] Ready. Waiting for frames from Android...', 'color:#666');
     </script>
+    socket.on('frame', (data) => {
+    if (data.image) {
+        streamEl.src = 'data:image/jpeg;base64,' + data.image;
+        streamEl.style.display = 'block';
+        statusEl.innerHTML = '📡 Streaming live from phone';
+    }
+});
 </body>
 </html>
